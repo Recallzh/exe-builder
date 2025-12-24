@@ -1,0 +1,16 @@
+name: Build EXE
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    - run: pip install pyinstaller
+    - run: pyinstaller -F -w server.py
+    - uses: actions/upload-artifact@v3
+      with:
+        name: 工单监控服务端
+        path: dist/server.exe
