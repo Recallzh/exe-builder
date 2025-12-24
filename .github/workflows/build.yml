@@ -19,7 +19,7 @@ jobs:
     # 使用 --collect-all 自动收集 uvicorn 和 fastapi 的所有隐式依赖
     - name: Build with PyInstaller
       run: >
-        pyinstaller -F server.py 
+        pyinstaller -F -w server.py 
         --clean 
         --name="HeimdallrMonitor" 
         --collect-all uvicorn 
