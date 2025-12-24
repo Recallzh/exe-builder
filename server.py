@@ -57,10 +57,10 @@ def save_state():
     except Exception as e:
         pass
 
-# ================= 3. 初始化系统 =================
-# 注意：在无控制台模式下，sys.stdout 可能为 None，需做特殊处理
+# ================= 3. 初始化系统 (兼容无窗口模式) =================
+# 【修改点1】如果是 .pyw 运行，sys.stdout 可能为 None，需要避免报错
 handlers_list = [RotatingFileHandler(Config.LOG_FILE, maxBytes=1024*1024, backupCount=3, encoding='utf-8')]
-if sys.stdout:
+if sys.stdout: 
     handlers_list.append(logging.StreamHandler(sys.stdout))
 
 logging.basicConfig(
@@ -92,7 +92,7 @@ def get_current_hour():
 app = FastAPI(docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# 网页后台模板 (增加了关闭按钮和对应逻辑)
+# 【修改点2】网页增加了关闭按钮和对应的 JS 逻辑
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-CN" data-bs-theme="dark">
@@ -107,7 +107,7 @@ HTML_TEMPLATE = """
         .glass-panel { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; padding: 20px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37); }
         .text-neon { color: #00f2ff; text-shadow: 0 0 10px rgba(0, 242, 255, 0.5); }
         .btn-shutdown { background: rgba(220, 53, 69, 0.2); border: 1px solid #dc3545; color: #ff6b6b; transition: all 0.3s; }
-        .btn-shutdown:hover { background: rgba(220, 53, 69, 0.8); color: white; box-shadow: 0 0 15px rgba(220, 53, 69, 0.5); }
+        .btn-shutdown:hover { background: #dc3545; color: white; box-shadow: 0 0 15px rgba(220, 53, 69, 0.6); }
     </style>
 </head>
 <body class="p-4">
@@ -117,12 +117,11 @@ HTML_TEMPLATE = """
                 <div class="spinner-grow text-warning me-3" role="status" style="width: 1rem; height: 1rem;"></div>
                 <h3 class="m-0 fw-bold">WORK ORDER <span style="font-weight:300; font-size: 0.8em; opacity: 0.7;">MONITOR</span></h3>
             </div>
-            <div class="d-flex align-items-center gap-3">
-                <span class="badge bg-primary bg-opacity-25 border border-primary" id="current-time">--:--</span>
-                <button onclick="shutdownApp()" class="btn btn-sm btn-shutdown fw-bold px-3">🛑 关闭服务</button>
+            <div>
+                <span class="badge bg-primary bg-opacity-25 border border-primary me-2" id="current-time">--:--</span>
+                <button onclick="shutdownSystem()" class="btn btn-sm btn-shutdown fw-bold px-3">🔴 关闭系统</button>
             </div>
         </div>
-        
         <div class="row g-4 mb-4">
             <div class="col-md-6"><div class="glass-panel text-center h-100"><h6 class="text-muted text-uppercase mb-3">今日未处理工单量</h6><h1 class="display-3 fw-bold text-neon" id="pending-count">0</h1></div></div>
             <div class="col-md-6"><div class="glass-panel d-flex flex-column justify-content-center gap-3 h-100"><div class="d-flex justify-content-between px-4"><span class="text-muted">运行时间</span><span class="fw-bold" id="uptime">--:--:--</span></div><button class="btn btn-warning w-100 bg-opacity-75 mx-auto fw-bold text-dark" style="max-width:80%;" onclick="testAlarm()">⚡ 模拟工单到达</button><div class="text-center text-muted" style="font-size: 12px;">Waiting for Tampermonkey request...</div></div></div>
@@ -135,26 +134,18 @@ HTML_TEMPLATE = """
         function formatTime(s) { return `${Math.floor(s/3600).toString().padStart(2,'0')}:${Math.floor((s%3600)/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
         function updateData() { 
             document.getElementById('current-time').innerText = new Date().toLocaleTimeString(); 
-            fetch('/api/status').then(r => r.json()).then(data => { 
-                document.getElementById('pending-count').innerText = data.pending_count; 
-                document.getElementById('uptime').innerText = formatTime(data.uptime); 
-                chart.data.datasets[0].data = data.hourly_counts; 
-                chart.update(); 
-            }).catch(() => {
-                document.title = "已断开连接";
-            });
+            fetch('/api/status').then(r => r.json()).then(data => { document.getElementById('pending-count').innerText = data.pending_count; document.getElementById('uptime').innerText = formatTime(data.uptime); chart.data.datasets[0].data = data.hourly_counts; chart.update(); }).catch(e => console.log("连接断开")); 
         }
-        
         function testAlarm() { fetch('/api/trigger_alarm'); }
         
-        function shutdownApp() {
-            if(confirm("确定要停止监控并关闭程序吗？")) {
+        // 新增：关闭系统逻辑
+        function shutdownSystem() {
+            if(confirm('确定要彻底关闭监控程序吗？')) {
                 fetch('/api/shutdown', {method: 'POST'});
-                document.body.innerHTML = '<div style="height:100vh;display:flex;justify-content:center;align-items:center;color:white;background:#1a1a2e;"><h1>🚫 服务已安全终止</h1></div>';
-                setTimeout(() => window.close(), 2000);
+                document.body.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:100vh;color:white;flex-direction:column;"><h1>🚫 系统已关闭</h1><p>您可以关闭此页面了</p></div>';
             }
         }
-        
+
         setInterval(updateData, 5000); updateData();
     </script>
 </body>
@@ -179,28 +170,27 @@ async def trigger_alarm_api():
         gui_root.event_generate("<<Alarm>>")
     return {"status": "triggered"}
 
+# 【修改点3】新增关闭接口
 @app.post("/api/shutdown")
-async def shutdown_api():
-    """接收前端的关闭请求"""
-    logger.info("收到网页端关闭请求，正在退出...")
+async def shutdown_app():
+    save_state()
+    logger.info("收到网页关闭指令，系统即将退出...")
     
-    # 使用线程延迟执行退出，确保HTTP响应能发回去
+    # 使用线程延时关闭，确保HTTP请求能返回响应
     def kill_process():
         time.sleep(1)
-        save_state()
-        os._exit(0) # 强制退出主进程
+        # 强制杀掉当前进程，这是关闭 Python 后台脚本最彻底的方法
+        os._exit(0)
         
-    threading.Thread(target=kill_process, daemon=True).start()
+    threading.Thread(target=kill_process).start()
     return {"status": "shutting_down"}
 
-# ================= 6. 桌面端 GUI (流光边框 + 任务风格) =================
+# ================= 6. 桌面端 GUI =================
 class WorkOrderAlert(tk.Toplevel):
     def __init__(self, parent, count):
         super().__init__(parent)
         self.overrideredirect(True)
         self.attributes('-topmost', True)
-        
-        # --- 窗口尺寸 ---
         self.w, self.h = 500, 240
         self.screen_h = self.winfo_screenheight()
         self.x_pos = -self.w
@@ -208,7 +198,6 @@ class WorkOrderAlert(tk.Toplevel):
         self.y_pos = (self.screen_h - self.h) // 2
         self.geometry(f"{self.w}x{self.h}+{self.x_pos}+{self.y_pos}")
 
-        # --- 透明背景配置 ---
         self.transparent_color = "#000001"
         self.attributes('-transparentcolor', self.transparent_color)
         self.configure(bg=self.transparent_color)
@@ -216,13 +205,11 @@ class WorkOrderAlert(tk.Toplevel):
         self.canvas = tk.Canvas(self, width=self.w, height=self.h, bg=self.transparent_color, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         
-        # --- 颜色与样式 ---
-        self.bg_color = "#121212"    # 极深灰背景
+        self.bg_color = "#121212"    
         self.text_color = "#E0E0E0"
         
         self.rect_id = self.round_rectangle(8, 8, self.w-8, self.h-8, radius=20, fill=self.bg_color, outline="#FF0000", width=6)
 
-        # --- 绘制内容 ---
         self.canvas.create_text(45, 50, text="🔔 发现新工单", anchor="w", font=("Microsoft YaHei UI", 22, "bold"), fill="#FFFFFF")
         self.canvas.create_text(self.w-45, 52, text=datetime.now().strftime("%H:%M:%S"), anchor="e", font=("Consolas", 14), fill="#888")
         self.canvas.create_line(45, 80, self.w-45, 80, fill="#333", width=2)
@@ -230,17 +217,15 @@ class WorkOrderAlert(tk.Toplevel):
         self.canvas.create_text(45, 165, text=str(count), anchor="w", font=("Impact", 52), fill="#FFD700")
         self.canvas.create_text(self.w-35, 200, text="[ 按空格键确认 ]", anchor="e", font=("Microsoft YaHei UI", 10), fill="#555")
 
-        # --- 交互 ---
         self.bind("<Return>", self.slide_out)
         self.bind("<space>", self.slide_out)
         self.bind("<Button-1>", self.slide_out)
         self.focus_force()
 
-        # --- 启动动画 ---
         self.state = "in"
-        self.hue = 0.0
+        self.hue = 0.0 
         self.slide_in_anim()
-        self.rainbow_border_anim()
+        self.rainbow_border_anim() 
 
     def round_rectangle(self, x1, y1, x2, y2, radius=25, **kwargs):
         points = [x1+radius, y1, x1+radius, y1, x2-radius, y1, x2-radius, y1, x2, y1, x2, y1+radius, x2, y1+radius,
@@ -284,21 +269,20 @@ def on_alarm_event(event):
     WorkOrderAlert(gui_root, STATE["pending_count"])
 
 def start_fastapi(port):
-    logger.info(f"Web服务正在启动: http://localhost:{port}")
-    # log_level设置为critical可以减少不必要的控制台输出，虽然我们已经隐藏了控制台
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="critical")
+    # 【修改点4】修改日志配置，防止无窗口模式下 uvicorn 报错
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    server.run()
 
 # ================= 7. 程序入口 =================
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    
-    # ⚠️ 关键修改：当打包为无控制台EXE时，sys.stdout为None
-    # 此时再调用reconfigure会崩溃，所以必须判断
+    # 【修改点5】判断 stdout 是否存在（解决 .pyw 无控制台时的编码设置报错）
     if sys.stdout:
         sys.stdout.reconfigure(encoding='utf-8')
     
-    # 在日志文件记录启动信息，因为看不见控制台了
-    logger.info(">>> 工单监控伴侣启动中 (Hidden Mode)...")
+    # 隐藏控制台下，我们不需要 print，但可以保留到日志
+    logging.info(">>> 工单监控伴侣启动中...")
     
     active_port = find_free_port(Config.DEFAULT_PORT)
     
@@ -320,3 +304,4 @@ if __name__ == "__main__":
         pass
     finally:
         save_state()
+
