@@ -5,12 +5,35 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
+    
     - uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-    - run: pip install pyinstaller
-    - run: pyinstaller -F server.py
+    
+    # 【关键修改1】安装依赖
+    # 确保你的仓库根目录下有 requirements.txt，或者直接在这里写 pip install fastapi uvicorn ...
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r requirements.txt
+
+    # 【关键修改2】增加隐式导入
+    # FastAPI/Uvicorn 打包时必须加上 hidden-import，否则 EXE 打开就会报错
+    - name: Build with PyInstaller
+      run: >
+        pyinstaller -F server.py
+        --hidden-import=uvicorn.logging
+        --hidden-import=uvicorn.loops
+        --hidden-import=uvicorn.loops.auto
+        --hidden-import=uvicorn.protocols
+        --hidden-import=uvicorn.protocols.http
+        --hidden-import=uvicorn.protocols.http.auto
+        --hidden-import=uvicorn.lifespan
+        --hidden-import=uvicorn.lifespan.on
+        --name="ServerApp"
+
     - uses: actions/upload-artifact@v4
       with:
-        name: ServerApp  # 这里改成了英文，绝对不会报错了！
-        path: dist/server.exe
+        name: ServerApp
+        path: dist/ServerApp.exe
