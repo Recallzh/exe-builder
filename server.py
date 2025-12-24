@@ -9,7 +9,7 @@ import time
 import json
 import os
 import multiprocessing
-import colorsys  # 【新增】用于实现丝滑的渐变色计算
+import colorsys
 from datetime import datetime
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -27,7 +27,7 @@ class Config:
 def load_state():
     default_state = {
         "date": datetime.now().strftime("%Y-%m-%d"),
-        "pending_count": 0, # 改名：更加语义化
+        "pending_count": 0,
         "hourly_counts": [0] * 24
     }
     
@@ -39,7 +39,6 @@ def load_state():
             saved = json.load(f)
             if saved.get("date") != datetime.now().strftime("%Y-%m-%d"):
                 return default_state
-            # 兼容旧数据的字段名读取
             if "total_today" in saved:
                 saved["pending_count"] = saved.pop("total_today")
             return saved
@@ -59,12 +58,9 @@ def save_state():
         pass
 
 # ================= 3. 初始化系统 =================
-# 注意：在 -w 模式下，sys.stdout 可能为 None，StreamHandler 可能会 fallback 到 stderr 或忽略
-# 为了防止 logging 初始化报错，可以加一个简单的判断，或者保持原样（通常 StreamHandler 能处理 None）
-handlers_list = [
-    RotatingFileHandler(Config.LOG_FILE, maxBytes=1024*1024, backupCount=3, encoding='utf-8')
-]
-if sys.stdout is not None:
+# 注意：在无控制台模式下，sys.stdout 可能为 None，需做特殊处理
+handlers_list = [RotatingFileHandler(Config.LOG_FILE, maxBytes=1024*1024, backupCount=3, encoding='utf-8')]
+if sys.stdout:
     handlers_list.append(logging.StreamHandler(sys.stdout))
 
 logging.basicConfig(
@@ -96,7 +92,7 @@ def get_current_hour():
 app = FastAPI(docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# 网页后台模板 (已修改文案)
+# 网页后台模板 (增加了关闭按钮和对应逻辑)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-CN" data-bs-theme="dark">
@@ -110,6 +106,8 @@ HTML_TEMPLATE = """
         body { background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460); font-family: 'Segoe UI', sans-serif; min-height: 100vh; color: #fff; }
         .glass-panel { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; padding: 20px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37); }
         .text-neon { color: #00f2ff; text-shadow: 0 0 10px rgba(0, 242, 255, 0.5); }
+        .btn-shutdown { background: rgba(220, 53, 69, 0.2); border: 1px solid #dc3545; color: #ff6b6b; transition: all 0.3s; }
+        .btn-shutdown:hover { background: rgba(220, 53, 69, 0.8); color: white; box-shadow: 0 0 15px rgba(220, 53, 69, 0.5); }
     </style>
 </head>
 <body class="p-4">
@@ -119,8 +117,12 @@ HTML_TEMPLATE = """
                 <div class="spinner-grow text-warning me-3" role="status" style="width: 1rem; height: 1rem;"></div>
                 <h3 class="m-0 fw-bold">WORK ORDER <span style="font-weight:300; font-size: 0.8em; opacity: 0.7;">MONITOR</span></h3>
             </div>
-            <div><span class="badge bg-primary bg-opacity-25 border border-primary me-2" id="current-time">--:--</span><span class="badge bg-success bg-opacity-25 text-success border border-success">LISTENING</span></div>
+            <div class="d-flex align-items-center gap-3">
+                <span class="badge bg-primary bg-opacity-25 border border-primary" id="current-time">--:--</span>
+                <button onclick="shutdownApp()" class="btn btn-sm btn-shutdown fw-bold px-3">🛑 关闭服务</button>
+            </div>
         </div>
+        
         <div class="row g-4 mb-4">
             <div class="col-md-6"><div class="glass-panel text-center h-100"><h6 class="text-muted text-uppercase mb-3">今日未处理工单量</h6><h1 class="display-3 fw-bold text-neon" id="pending-count">0</h1></div></div>
             <div class="col-md-6"><div class="glass-panel d-flex flex-column justify-content-center gap-3 h-100"><div class="d-flex justify-content-between px-4"><span class="text-muted">运行时间</span><span class="fw-bold" id="uptime">--:--:--</span></div><button class="btn btn-warning w-100 bg-opacity-75 mx-auto fw-bold text-dark" style="max-width:80%;" onclick="testAlarm()">⚡ 模拟工单到达</button><div class="text-center text-muted" style="font-size: 12px;">Waiting for Tampermonkey request...</div></div></div>
@@ -131,8 +133,28 @@ HTML_TEMPLATE = """
         const ctx = document.getElementById('dailyChart').getContext('2d');
         const chart = new Chart(ctx, { type: 'bar', data: { labels: Array.from({length: 24}, (_, i) => i + ":00"), datasets: [{ label: '工单量', data: Array(24).fill(0), backgroundColor: 'rgba(255, 206, 86, 0.5)', borderColor: '#ffce56', borderWidth: 1, borderRadius: 4 }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' } }, x: { grid: { display: false } } } } });
         function formatTime(s) { return `${Math.floor(s/3600).toString().padStart(2,'0')}:${Math.floor((s%3600)/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
-        function updateData() { document.getElementById('current-time').innerText = new Date().toLocaleTimeString(); fetch('/api/status').then(r => r.json()).then(data => { document.getElementById('pending-count').innerText = data.pending_count; document.getElementById('uptime').innerText = formatTime(data.uptime); chart.data.datasets[0].data = data.hourly_counts; chart.update(); }); }
+        function updateData() { 
+            document.getElementById('current-time').innerText = new Date().toLocaleTimeString(); 
+            fetch('/api/status').then(r => r.json()).then(data => { 
+                document.getElementById('pending-count').innerText = data.pending_count; 
+                document.getElementById('uptime').innerText = formatTime(data.uptime); 
+                chart.data.datasets[0].data = data.hourly_counts; 
+                chart.update(); 
+            }).catch(() => {
+                document.title = "已断开连接";
+            });
+        }
+        
         function testAlarm() { fetch('/api/trigger_alarm'); }
+        
+        function shutdownApp() {
+            if(confirm("确定要停止监控并关闭程序吗？")) {
+                fetch('/api/shutdown', {method: 'POST'});
+                document.body.innerHTML = '<div style="height:100vh;display:flex;justify-content:center;align-items:center;color:white;background:#1a1a2e;"><h1>🚫 服务已安全终止</h1></div>';
+                setTimeout(() => window.close(), 2000);
+            }
+        }
+        
         setInterval(updateData, 5000); updateData();
     </script>
 </body>
@@ -156,6 +178,20 @@ async def trigger_alarm_api():
     if gui_root:
         gui_root.event_generate("<<Alarm>>")
     return {"status": "triggered"}
+
+@app.post("/api/shutdown")
+async def shutdown_api():
+    """接收前端的关闭请求"""
+    logger.info("收到网页端关闭请求，正在退出...")
+    
+    # 使用线程延迟执行退出，确保HTTP响应能发回去
+    def kill_process():
+        time.sleep(1)
+        save_state()
+        os._exit(0) # 强制退出主进程
+        
+    threading.Thread(target=kill_process, daemon=True).start()
+    return {"status": "shutting_down"}
 
 # ================= 6. 桌面端 GUI (流光边框 + 任务风格) =================
 class WorkOrderAlert(tk.Toplevel):
@@ -184,25 +220,14 @@ class WorkOrderAlert(tk.Toplevel):
         self.bg_color = "#121212"    # 极深灰背景
         self.text_color = "#E0E0E0"
         
-        # 绘制背景 (保存ID用于流光特效)
-        # width=5 让边框更粗，渐变效果更明显
         self.rect_id = self.round_rectangle(8, 8, self.w-8, self.h-8, radius=20, fill=self.bg_color, outline="#FF0000", width=6)
 
-        # --- 绘制内容 (文案已修改) ---
-        # 1. 顶部状态
+        # --- 绘制内容 ---
         self.canvas.create_text(45, 50, text="🔔 发现新工单", anchor="w", font=("Microsoft YaHei UI", 22, "bold"), fill="#FFFFFF")
-        
-        # 2. 时间戳
         self.canvas.create_text(self.w-45, 52, text=datetime.now().strftime("%H:%M:%S"), anchor="e", font=("Consolas", 14), fill="#888")
-        
-        # 3. 分割线
         self.canvas.create_line(45, 80, self.w-45, 80, fill="#333", width=2)
-        
-        # 4. 核心指标
         self.canvas.create_text(45, 120, text="今日未处理工单量", anchor="w", font=("Microsoft YaHei UI", 12), fill="#AAA")
-        self.canvas.create_text(45, 165, text=str(count), anchor="w", font=("Impact", 52), fill="#FFD700") # 金色数字
-
-        # 5. 操作提示 (右下角)
+        self.canvas.create_text(45, 165, text=str(count), anchor="w", font=("Impact", 52), fill="#FFD700")
         self.canvas.create_text(self.w-35, 200, text="[ 按空格键确认 ]", anchor="e", font=("Microsoft YaHei UI", 10), fill="#555")
 
         # --- 交互 ---
@@ -213,9 +238,9 @@ class WorkOrderAlert(tk.Toplevel):
 
         # --- 启动动画 ---
         self.state = "in"
-        self.hue = 0.0 # 色相初始值
+        self.hue = 0.0
         self.slide_in_anim()
-        self.rainbow_border_anim() # 启动流光渐变
+        self.rainbow_border_anim()
 
     def round_rectangle(self, x1, y1, x2, y2, radius=25, **kwargs):
         points = [x1+radius, y1, x1+radius, y1, x2-radius, y1, x2-radius, y1, x2, y1, x2, y1+radius, x2, y1+radius,
@@ -247,22 +272,12 @@ class WorkOrderAlert(tk.Toplevel):
             self.destroy()
 
     def rainbow_border_anim(self):
-        """流光渐变动效：在HSV色彩空间中循环，实现丝滑变色"""
         if self.state == "out": return
-        
-        # 1. 计算RGB颜色 (Hue, Saturation, Value) -> (R, G, B)
-        # Hue 每次增加 0.01，实现颜色流动
         rgb = colorsys.hsv_to_rgb(self.hue, 1.0, 1.0) 
-        # 转换为Hex格式 #RRGGBB
         color_hex = '#%02x%02x%02x' % (int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
-        
-        # 2. 更新边框颜色
         self.canvas.itemconfig(self.rect_id, outline=color_hex)
-        
-        # 3. 循环 Hue (0.0 - 1.0)
         self.hue += 0.015
         if self.hue > 1.0: self.hue = 0.0
-        
         self.after(20, self.rainbow_border_anim)
 
 def on_alarm_event(event):
@@ -270,23 +285,21 @@ def on_alarm_event(event):
 
 def start_fastapi(port):
     logger.info(f"Web服务正在启动: http://localhost:{port}")
-    # 在无控制台模式下，log_level设为warning或更高级别可减少控制台输出尝试
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    # log_level设置为critical可以减少不必要的控制台输出，虽然我们已经隐藏了控制台
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="critical")
 
 # ================= 7. 程序入口 =================
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     
-    # 【核心修复】
-    # 当使用 pyinstaller -w 打包时，sys.stdout 为 None
-    # 此时调用 reconfigure 会报错，因此必须加判断
-    if sys.stdout is not None:
-        try:
-            sys.stdout.reconfigure(encoding='utf-8')
-        except AttributeError:
-            pass # 双重保险
+    # ⚠️ 关键修改：当打包为无控制台EXE时，sys.stdout为None
+    # 此时再调用reconfigure会崩溃，所以必须判断
+    if sys.stdout:
+        sys.stdout.reconfigure(encoding='utf-8')
     
-    print(">>> 工单监控伴侣启动中...")
+    # 在日志文件记录启动信息，因为看不见控制台了
+    logger.info(">>> 工单监控伴侣启动中 (Hidden Mode)...")
+    
     active_port = find_free_port(Config.DEFAULT_PORT)
     
     t = threading.Thread(target=start_fastapi, args=(active_port,), daemon=True)
@@ -298,10 +311,7 @@ if __name__ == "__main__":
     
     def open_browser():
         time.sleep(1.5)
-        # 在无界面模式下，print 是无效的，但不会报错（除非显式调用 flush 等）
-        print(f"Opening browser at port {active_port}")
         webbrowser.open(f"http://localhost:{active_port}")
-    
     threading.Thread(target=open_browser, daemon=True).start()
     
     try:
@@ -310,4 +320,3 @@ if __name__ == "__main__":
         pass
     finally:
         save_state()
-        print(">>> 退出程序")
