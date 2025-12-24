@@ -9,7 +9,7 @@ jobs:
       with:
         python-version: '3.10'
     - run: pip install pyinstaller
-    - run: pyinstaller -F -w server.py
+    - run: pyinstaller -F server.py
     - uses: actions/upload-artifact@v4
       with:
         name: ServerApp  # 这里改成了英文，绝对不会报错了！
